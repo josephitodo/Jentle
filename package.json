@@ -1,15 +1,15 @@
 {
-  "name": "jentle-bot",
+  "name": "Jentle",
   "version": "1.0.0",
   "description": "Jentle WhatsApp Bot",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.18",
-    "pino": "^8.14.1",
-    "qrcode-terminal": "^0.12.0"
+    "pino": "^8.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "adm-zip": "^0.5.10"
   }
 }
