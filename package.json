@@ -1,19 +1,13 @@
 {
   "name": "jentle",
   "version": "1.0.0",
-  "description": "A powerful WhatsApp bot built with Baileys",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.18",
-    "qrcode-terminal": "^0.12.0",
-    "node-cron": "^3.0.3"
-  },
-  "engines": {
-    "node": ">=20.0.0"
-  },
-  "author": "Joseph Itodo",
-  "license": "MIT"
+    "pino": "^8.14.1"
+  }
 }
