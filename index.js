@@ -1,75 +1,59 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys'
-import qrcode from 'qrcode-terminal'
-import fs from 'fs'
-import path from 'path'
-import cron from 'node-cron'
+// Jentle Bot - WhatsApp Bot
+const makeWASocket = require('@whiskeysockets/baileys').default
+const { useMultiFileAuthState } = require('@whiskeysockets/baileys')
+const fs = require('fs')
+const path = require('path')
+const qrcode = require('qrcode-terminal')
 
 async function startBot() {
     console.log("🚀 Jentle Bot is starting...")
 
-    // Load auth state
-    const authPath = './auth'
-    const { state, saveCreds } = await useMultiFileAuthState(authPath)
+    // Ensure auth folder exists
+    const authDir = path.join(__dirname, 'auth')
+    if (!fs.existsSync(authDir)) {
+        fs.mkdirSync(authDir)
+        console.log("📂 Auth folder created!")
+    }
 
+    // Load auth state
+    const { state, saveCreds } = await useMultiFileAuthState(authDir)
+
+    // Create socket
     const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: false // we handle QR manually
+        printQRInTerminal: true, // Show QR directly in terminal
+        auth: state
     })
 
-    // Show QR code only once
+    // Save session when updated
+    sock.ev.on('creds.update', saveCreds)
+
+    // Connection updates
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update
-
         if (qr) {
-            console.log("📸 QR Code received! Scan it with WhatsApp:")
+            console.log("📸 Scan this QR code to log in:")
             qrcode.generate(qr, { small: true })
         }
 
         if (connection === 'open') {
             console.log("✅ Jentle Bot connected successfully!")
-        }
-
-        if (connection === 'close') {
-            const shouldReconnect = 
-                lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
-
-            console.log(`⚠️ Connection closed. Reconnect: ${shouldReconnect}`)
-            if (shouldReconnect) {
-                startBot()
-            } else {
-                console.log("❌ Logged out. Please scan the QR again.")
-            }
+        } else if (connection === 'close') {
+            console.log("⚠️ Connection closed. Reconnecting...")
+            startBot()
         }
     })
 
-    // Save credentials when updated
-    sock.ev.on('creds.update', saveCreds)
+    // Listen for messages
+    sock.ev.on('messages.upsert', async (msg) => {
+        const message = msg.messages[0]
+        if (!message.message || message.key.fromMe) return
 
-    // Basic test command
-    sock.ev.on('messages.upsert', async (m) => {
-        const msg = m.messages[0]
-        if (!msg.message) return
+        const sender = message.key.remoteJid
+        const text = message.message.conversation || message.message.extendedTextMessage?.text || ''
 
-        const from = msg.key.remoteJid
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ""
-
-        if (text.toLowerCase() === ".menu") {
-            await sock.sendMessage(from, { text: "✅ Jentle Bot is active and running!" })
+        if (text.toLowerCase() === '.menu') {
+            await sock.sendMessage(sender, { text: "✅ Jentle Bot is active and running!" })
         }
-    })
-
-    // ---- Auto backup ----
-    cron.schedule('0 */6 * * *', () => {
-        const backupFile = `auth-backup-${Date.now()}.zip`
-        const { exec } = require('child_process')
-
-        exec(`zip -r ${backupFile} auth`, (err) => {
-            if (err) {
-                console.error("❌ Backup failed:", err)
-            } else {
-                console.log(`💾 Backup saved as ${backupFile}`)
-            }
-        })
     })
 }
 
