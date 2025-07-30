@@ -1,3 +1,4 @@
-node_modules
+node_modules/
+auth/
 auth.zip
-qr.png
+package-lock.json
