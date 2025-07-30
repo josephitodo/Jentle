@@ -1,60 +1,56 @@
-// Jentle Bot - WhatsApp Bot
-const makeWASocket = require('@whiskeysockets/baileys').default
-const { useMultiFileAuthState } = require('@whiskeysockets/baileys')
-const fs = require('fs')
-const path = require('path')
-const qrcode = require('qrcode-terminal')
+import makeWASocket, {
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion
+} from '@whiskeysockets/baileys';
+import pino from 'pino';
+import fs from 'fs';
+import path from 'path';
+
+console.log("🚀 Jentle Bot is starting...");
 
 async function startBot() {
-    console.log("🚀 Jentle Bot is starting...")
+    const { state, saveCreds } = await useMultiFileAuthState('auth');
 
-    // Ensure auth folder exists
-    const authDir = path.join(__dirname, 'auth')
-    if (!fs.existsSync(authDir)) {
-        fs.mkdirSync(authDir)
-        console.log("📂 Auth folder created!")
-    }
+    const { version } = await fetchLatestBaileysVersion();
 
-    // Load auth state
-    const { state, saveCreds } = await useMultiFileAuthState(authDir)
-
-    // Create socket
     const sock = makeWASocket({
-        printQRInTerminal: true, // Show QR directly in terminal
-        auth: state
-    })
+        version,
+        auth: state,
+        printQRInTerminal: true,
+        logger: pino({ level: 'silent' }),
+        browser: ['Ubuntu', 'Chrome', '22.04.4'],
+    });
 
-    // Save session when updated
-    sock.ev.on('creds.update', saveCreds)
+    // Handle connection updates
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
 
-    // Connection updates
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update
-        if (qr) {
-            console.log("📸 Scan this QR code to log in:")
-            qrcode.generate(qr, { small: true })
+        if (connection === 'close') {
+            const shouldReconnect =
+                (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log('⚠️ Connection closed.', shouldReconnect ? 'Reconnecting...' : '');
+            if (shouldReconnect) startBot();
+        } else if (connection === 'open') {
+            console.log('✅ Jentle Bot connected successfully!');
         }
+    });
 
-        if (connection === 'open') {
-            console.log("✅ Jentle Bot connected successfully!")
-        } else if (connection === 'close') {
-            console.log("⚠️ Connection closed. Reconnecting...")
-            startBot()
+    // Save session whenever it's updated
+    sock.ev.on('creds.update', saveCreds);
+
+    // Message Handler (Respond to .menu and others)
+    sock.ev.on('messages.upsert', async (m) => {
+        const msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const from = msg.key.remoteJid;
+        const textMsg = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+
+        if (textMsg.toLowerCase() === '.menu') {
+            await sock.sendMessage(from, { text: '✅ Jentle Bot is active and running!' });
         }
-    })
-
-    // Listen for messages
-    sock.ev.on('messages.upsert', async (msg) => {
-        const message = msg.messages[0]
-        if (!message.message || message.key.fromMe) return
-
-        const sender = message.key.remoteJid
-        const text = message.message.conversation || message.message.extendedTextMessage?.text || ''
-
-        if (text.toLowerCase() === '.menu') {
-            await sock.sendMessage(sender, { text: "✅ Jentle Bot is active and running!" })
-        }
-    })
+    });
 }
 
-startBot()
+startBot();
