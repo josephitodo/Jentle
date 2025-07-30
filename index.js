@@ -1,17 +1,17 @@
-import makeWASocket, {
+import baileys from '@whiskeysockets/baileys';
+import pino from 'pino';
+
+const {
+    makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion
-} from '@whiskeysockets/baileys';
-import pino from 'pino';
-import fs from 'fs';
-import path from 'path';
+} = baileys;
 
 console.log("🚀 Jentle Bot is starting...");
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth');
-
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -22,7 +22,6 @@ async function startBot() {
         browser: ['Ubuntu', 'Chrome', '22.04.4'],
     });
 
-    // Handle connection updates
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
@@ -36,10 +35,9 @@ async function startBot() {
         }
     });
 
-    // Save session whenever it's updated
     sock.ev.on('creds.update', saveCreds);
 
-    // Message Handler (Respond to .menu and others)
+    // Handle .menu command
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe) return;
