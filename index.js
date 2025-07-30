@@ -44,17 +44,29 @@ async function startBot() {
     // Save creds
     sock.ev.on('creds.update', saveCreds);
 
-    // Listen for messages
+    // Improved message handler
     sock.ev.on('messages.upsert', async (m) => {
-        const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        try {
+            const msg = m.messages[0];
+            if (!msg.message || msg.key.fromMe) return;
 
-        const from = msg.key.remoteJid;
-        const textMsg = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+            const from = msg.key.remoteJid;
 
-        // Respond to ".menu"
-        if (textMsg.toLowerCase() === '.menu') {
-            await sock.sendMessage(from, { text: '✅ Jentle Bot is active and running!' });
+            // Extract text from various message types
+            const type = Object.keys(msg.message)[0];
+            let textMsg = '';
+            if (type === 'conversation') textMsg = msg.message.conversation;
+            else if (type === 'extendedTextMessage') textMsg = msg.message.extendedTextMessage.text;
+            else if (type === 'imageMessage' && msg.message.imageMessage.caption)
+                textMsg = msg.message.imageMessage.caption;
+            else if (type === 'videoMessage' && msg.message.videoMessage.caption)
+                textMsg = msg.message.videoMessage.caption;
+
+            if (textMsg.trim().toLowerCase() === '.menu') {
+                await sock.sendMessage(from, { text: '✅ Jentle Bot is active and running!' });
+            }
+        } catch (err) {
+            console.error('Message handler error:', err);
         }
     });
 }
