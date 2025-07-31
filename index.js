@@ -3,7 +3,26 @@ const { useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/bai
 const pino = require("pino");
 const fs = require("fs");
 const qrcode = require("qrcode-terminal");
+const AdmZip = require("adm-zip");
+const path = require("path");
 
+// Backup function
+async function backupAuth() {
+    if (!fs.existsSync("auth")) return;
+
+    const zip = new AdmZip();
+    zip.addLocalFolder("auth");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupFile = path.join("backups", `auth-backup-${timestamp}.zip`);
+
+    // Create backups folder if it doesn't exist
+    if (!fs.existsSync("backups")) fs.mkdirSync("backups");
+
+    zip.writeZip(backupFile);
+    console.log(`📦 Auth folder backed up at: ${backupFile}`);
+}
+
+// Start bot
 async function startBot() {
     console.log("🚀 Jentle is starting...");
 
@@ -11,43 +30,43 @@ async function startBot() {
     console.log("✅ Auth folder loaded successfully!");
 
     const sock = makeWASocket({
-        logger: pino({ level: "silent" }),
+        logger: pino({ level: "silent" }), // silence all Baileys logs
         auth: state,
-        printQRInTerminal: false // we handle QR manually below
+        printQRInTerminal: false
     });
 
-    // Save session automatically
+    // Auto-save and backup session
     sock.ev.on("creds.update", async () => {
         await saveCreds();
         console.log("💾 Session saved!");
+        await backupAuth();
     });
 
-    // Handle connection updates
+    // Connection updates
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // Show QR Code manually if not logged in yet
         if (qr && !fs.existsSync("auth/creds.json")) {
-            console.log("📸 Scan this QR to login:");
+            console.log("📸 Scan this QR code to log in:");
             qrcode.generate(qr, { small: true });
         }
 
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
             if (reason === DisconnectReason.loggedOut) {
-                console.log("❌ Logged out! Delete auth folder and scan QR again.");
+                console.log("❌ Logged out! Delete auth folder and re-scan QR.");
             } else {
-                console.log("⚠️ Connection closed. Reconnecting...");
+                console.log("⚠️ Connection lost. Reconnecting...");
                 startBot();
             }
         }
 
         if (connection === "open") {
-            console.log("✅ Jentle connected successfully and session is stable!");
+            console.log("✅ Jentle connected and session is stable!");
         }
     });
 
-    // Handle incoming messages
+    // Message listener
     sock.ev.on("messages.upsert", async (m) => {
         const msg = m.messages[0];
         if (!msg.message) return;
@@ -55,7 +74,7 @@ async function startBot() {
 
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
-        // Auto-delete links in groups (if sender is not admin)
+        // Auto-delete links in groups (if sender not admin)
         if (msg.key.remoteJid.endsWith("@g.us")) {
             const hasLink = /(https?:\/\/|www\.)/i.test(text);
             if (hasLink) {
