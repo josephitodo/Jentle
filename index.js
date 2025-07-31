@@ -4,9 +4,16 @@ const pino = require("pino")
 const fs = require("fs")
 const qrcode = require("qrcode-terminal")
 const AdmZip = require("adm-zip")
-require('events').setMaxListeners(0) // Avoid listener memory warnings
 
-// Auto-backup function
+// --- Filter noisy Baileys logs ---
+const originalLog = console.log
+console.log = (...args) => {
+    if (args.some(a => typeof a === "string" && a.includes("Closing stale open session"))) return
+    if (args.some(a => typeof a === "string" && a.includes("Closing session:"))) return
+    originalLog(...args)
+}
+
+// --- Auto-backup auth folder ---
 async function backupAuth() {
     if (!fs.existsSync("auth")) return
     const zip = new AdmZip()
@@ -17,26 +24,27 @@ async function backupAuth() {
     console.log(`📦 Auth folder backed up as: ${backupFile}`)
 }
 
-async function startJentle() {
+// --- Start the bot ---
+async function startBot() {
     console.log("🚀 Jentle is starting...")
 
     const { state, saveCreds } = await useMultiFileAuthState("auth")
     console.log("✅ Auth folder loaded successfully!")
 
     const sock = makeWASocket({
-        logger: pino({ level: "silent" }), // Silence Baileys internal logs
+        logger: pino({ level: "silent" }),
         auth: state,
         printQRInTerminal: false
     })
 
-    // Session save & auto-backup
+    // Save session and auto-backup
     sock.ev.on("creds.update", async () => {
         await saveCreds()
         console.log("💾 Session saved!")
         await backupAuth()
     })
 
-    // Connection update handler
+    // Connection updates (handle QR codes, reconnects, etc.)
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect, qr } = update
 
@@ -51,7 +59,7 @@ async function startJentle() {
                 console.log("❌ Logged out! Delete auth folder and scan QR again.")
             } else {
                 console.log("⚠️ Connection closed. Reconnecting...")
-                startJentle()
+                startBot()
             }
         }
 
@@ -60,40 +68,24 @@ async function startJentle() {
         }
     })
 
-    // Message handler
+    // Message handler (basic commands, AFK ready)
     sock.ev.on("messages.upsert", async (m) => {
         const msg = m.messages[0]
         if (!msg.message) return
         if (msg.key.remoteJid === "status@broadcast") return
 
+        const sender = msg.key.participant || msg.key.remoteJid
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ""
 
-        // Auto-delete links in groups
-        if (msg.key.remoteJid.endsWith("@g.us")) {
-            const hasLink = /(https?:\/\/|www\.)/i.test(text)
-            if (hasLink) {
-                const groupMeta = await sock.groupMetadata(msg.key.remoteJid)
-                const admins = groupMeta.participants.filter(p => p.admin).map(p => p.id)
-                const sender = msg.key.participant
-
-                if (!admins.includes(sender)) {
-                    await sock.sendMessage(msg.key.remoteJid, { delete: msg.key })
-                    await sock.sendMessage(msg.key.remoteJid, {
-                        text: `⚠️ @${sender.split("@")[0]} Links are not allowed!`,
-                        mentions: [sender]
-                    })
-                    return
-                }
-            }
-        }
-
-        // Test command
+        // Example: simple test command
         if (text.trim().toLowerCase() === ".menu") {
             await sock.sendMessage(msg.key.remoteJid, {
                 text: "✅ Jentle is active and running!"
             })
         }
+
+        // More features will be added here (AFK, mute, etc.)
     })
 }
 
-startJentle()
+startBot()
