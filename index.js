@@ -5,17 +5,17 @@ const fs = require("fs")
 const qrcode = require("qrcode-terminal")
 const AdmZip = require("adm-zip")
 
-// --- Filter noisy Baileys logs ---
-const originalLog = console.log
-console.log = (...args) => {
+// --- Filter noisy Baileys & terminal logs ---
+const filterLogs = (method) => (...args) => {
     if (args.some(a => typeof a === "string" && a.includes("Closing stale open session"))) return
     if (args.some(a => typeof a === "string" && a.includes("Closing session:"))) return
-    originalLog(...args)
+    method(...args)
 }
+console.log = filterLogs(console.log)
+console.error = filterLogs(console.error)
 
 // --- Auto-backup auth folder ---
 async function backupAuth() {
-    if (!fs.existsSync("auth")) return
     const zip = new AdmZip()
     zip.addLocalFolder("auth")
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
@@ -24,7 +24,7 @@ async function backupAuth() {
     console.log(`📦 Auth folder backed up as: ${backupFile}`)
 }
 
-// --- Start the bot ---
+// --- Start Jentle Bot ---
 async function startBot() {
     console.log("🚀 Jentle is starting...")
 
@@ -32,19 +32,19 @@ async function startBot() {
     console.log("✅ Auth folder loaded successfully!")
 
     const sock = makeWASocket({
-        logger: pino({ level: "silent" }),
+        logger: pino({ level: "fatal" }), // suppress internal Baileys logs
         auth: state,
         printQRInTerminal: false
     })
 
-    // Save session and auto-backup
+    // Save session and backup automatically
     sock.ev.on("creds.update", async () => {
         await saveCreds()
         console.log("💾 Session saved!")
         await backupAuth()
     })
 
-    // Connection updates (handle QR codes, reconnects, etc.)
+    // Handle connection updates
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect, qr } = update
 
@@ -68,23 +68,39 @@ async function startBot() {
         }
     })
 
-    // Message handler (basic commands, AFK ready)
+    // Handle incoming messages
     sock.ev.on("messages.upsert", async (m) => {
         const msg = m.messages[0]
         if (!msg.message) return
         if (msg.key.remoteJid === "status@broadcast") return
 
-        const sender = msg.key.participant || msg.key.remoteJid
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ""
 
-        // Example: simple test command
+        // Auto-delete links in groups
+        if (msg.key.remoteJid.endsWith("@g.us")) {
+            const hasLink = /(https?:\/\/|www\.)/i.test(text)
+            if (hasLink) {
+                const groupMeta = await sock.groupMetadata(msg.key.remoteJid)
+                const admins = groupMeta.participants.filter(p => p.admin).map(p => p.id)
+                const sender = msg.key.participant
+
+                if (!admins.includes(sender)) {
+                    await sock.sendMessage(msg.key.remoteJid, { delete: msg.key })
+                    await sock.sendMessage(msg.key.remoteJid, {
+                        text: `⚠️ @${sender.split("@")[0]} Links are not allowed!`,
+                        mentions: [sender]
+                    })
+                    return
+                }
+            }
+        }
+
+        // Menu command
         if (text.trim().toLowerCase() === ".menu") {
             await sock.sendMessage(msg.key.remoteJid, {
                 text: "✅ Jentle is active and running!"
             })
         }
-
-        // More features will be added here (AFK, mute, etc.)
     })
 }
 
