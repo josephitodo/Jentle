@@ -2,12 +2,7 @@ const makeWASocket = require("@whiskeysockets/baileys").default;
 const { useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const fs = require("fs");
-const path = require("path");
 const qrcode = require("qrcode-terminal");
-
-// Load feature modules
-const autoDelete = require("./lib/autoDelete");
-const menu = require("./lib/menu");
 
 async function startBot() {
     console.log("🚀 Jentle is starting...");
@@ -18,20 +13,29 @@ async function startBot() {
     const sock = makeWASocket({
         logger: pino({ level: "silent" }),
         auth: state,
-        printQRInTerminal: true
+        printQRInTerminal: false // we handle QR manually below
     });
 
-    // Save credentials
-    sock.ev.on("creds.update", saveCreds);
+    // Save session automatically
+    sock.ev.on("creds.update", async () => {
+        await saveCreds();
+        console.log("💾 Session saved!");
+    });
 
-    // Connection updates
+    // Handle connection updates
     sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
+        // Show QR Code manually if not logged in yet
+        if (qr && !fs.existsSync("auth/creds.json")) {
+            console.log("📸 Scan this QR to login:");
+            qrcode.generate(qr, { small: true });
+        }
 
         if (connection === "close") {
             const reason = lastDisconnect?.error?.output?.statusCode;
             if (reason === DisconnectReason.loggedOut) {
-                console.log("❌ Logged out! Please delete auth folder and scan QR again.");
+                console.log("❌ Logged out! Delete auth folder and scan QR again.");
             } else {
                 console.log("⚠️ Connection closed. Reconnecting...");
                 startBot();
@@ -43,18 +47,39 @@ async function startBot() {
         }
     });
 
-    // Handle messages
+    // Handle incoming messages
     sock.ev.on("messages.upsert", async (m) => {
         const msg = m.messages[0];
         if (!msg.message) return;
         if (msg.key.remoteJid === "status@broadcast") return;
 
-        const from = msg.key.remoteJid;
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
 
-        // Run all modules
-        await autoDelete(sock, msg, text); // auto-delete links
-        await menu(sock, msg, text); // .menu command
+        // Auto-delete links in groups (if sender is not admin)
+        if (msg.key.remoteJid.endsWith("@g.us")) {
+            const hasLink = /(https?:\/\/|www\.)/i.test(text);
+            if (hasLink) {
+                const groupMeta = await sock.groupMetadata(msg.key.remoteJid);
+                const admins = groupMeta.participants.filter(p => p.admin).map(p => p.id);
+                const sender = msg.key.participant;
+
+                if (!admins.includes(sender)) {
+                    await sock.sendMessage(msg.key.remoteJid, { delete: msg.key });
+                    await sock.sendMessage(msg.key.remoteJid, {
+                        text: `⚠️ @${sender.split("@")[0]} Links are not allowed!`,
+                        mentions: [sender]
+                    });
+                    return;
+                }
+            }
+        }
+
+        // Test command
+        if (text.trim().toLowerCase() === ".menu") {
+            await sock.sendMessage(msg.key.remoteJid, {
+                text: "✅ Jentle is active and running!"
+            });
+        }
     });
 }
 
