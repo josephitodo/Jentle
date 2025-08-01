@@ -4,10 +4,10 @@ const {
     DisconnectReason,
     fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
-const pino = require('pino');
+const P = require('pino');
 
-// Disable noisy logs using pino (Baileys uses it internally)
-const logger = pino({ level: 'error' });
+// Disable noisy logs (Baileys internal logger)
+const silentLogger = P({ level: "silent" });
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('./auth');
@@ -15,26 +15,25 @@ async function startBot() {
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,
         version,
-        logger // Pass the silent logger
+        printQRInTerminal: true,
+        logger: silentLogger // ✅ This disables Baileys logs
     });
 
-    // Debug: Log every incoming message
+    // ✅ Debug: Only log incoming messages
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         if (!msg.message) return;
 
-        // Show message content in terminal
-        console.log("\n📩 Incoming message debug:", JSON.stringify(msg, null, 2));
+        console.log("\n📩 Debug message:", msg.key.remoteJid, msg.message);
 
-        // Respond to .menu
+        // Respond to .menu command
         if (msg.message.conversation && msg.message.conversation.toLowerCase() === '.menu') {
-            await sock.sendMessage(msg.key.remoteJid, { text: '✅ Jentle Bot is active!\n\nHere is your menu...' });
+            await sock.sendMessage(msg.key.remoteJid, { text: '✅ Jentle Bot is alive!\n\nHere is your menu...' });
         }
     });
 
-    // Handle connection updates
+    // Connection updates
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
@@ -46,13 +45,13 @@ async function startBot() {
                 console.log("❌ Logged out. Delete auth folder and re-scan QR.");
             }
         } else if (connection === 'open') {
-            console.log("✅ Jentle Bot is connected and ready!");
+            console.log("✅ Jentle Bot connected successfully!");
         }
     });
 
-    // Save session
+    // Save credentials
     sock.ev.on('creds.update', saveCreds);
 }
 
-console.log("🚀 Jentle is starting...");
+console.log("🚀 Starting Jentle Bot...");
 startBot();
