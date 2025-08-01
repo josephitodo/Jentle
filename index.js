@@ -1,57 +1,107 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion
-} = require('@whiskeysockets/baileys');
-const P = require('pino');
+const makeWASocket = require("@whiskeysockets/baileys").default
+const { useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys")
+const pino = require("pino")
+const fs = require("fs")
+const qrcode = require("qrcode-terminal")
+const AdmZip = require("adm-zip")
 
-// Disable noisy logs (Baileys internal logger)
-const silentLogger = P({ level: "silent" });
+// --- Filter noisy Baileys & terminal logs ---
+const filterLogs = (method) => (...args) => {
+    if (args.some(a => typeof a === "string" && a.includes("Closing stale open session"))) return
+    if (args.some(a => typeof a === "string" && a.includes("Closing session:"))) return
+    method(...args)
+}
+console.log = filterLogs(console.log)
+console.error = filterLogs(console.error)
 
-async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('./auth');
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({
-        auth: state,
-        version,
-        printQRInTerminal: true,
-        logger: silentLogger // ✅ This disables Baileys logs
-    });
-
-    // ✅ Debug: Only log incoming messages
-    sock.ev.on('messages.upsert', async (m) => {
-        const msg = m.messages[0];
-        if (!msg.message) return;
-
-        console.log("\n📩 Debug message:", msg.key.remoteJid, msg.message);
-
-        // Respond to .menu command
-        if (msg.message.conversation && msg.message.conversation.toLowerCase() === '.menu') {
-            await sock.sendMessage(msg.key.remoteJid, { text: '✅ Jentle Bot is alive!\n\nHere is your menu...' });
-        }
-    });
-
-    // Connection updates
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === 'close') {
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            if (reason !== DisconnectReason.loggedOut) {
-                console.log("♻️ Reconnecting...");
-                startBot();
-            } else {
-                console.log("❌ Logged out. Delete auth folder and re-scan QR.");
-            }
-        } else if (connection === 'open') {
-            console.log("✅ Jentle Bot connected successfully!");
-        }
-    });
-
-    // Save credentials
-    sock.ev.on('creds.update', saveCreds);
+// --- Auto-backup auth folder ---
+async function backupAuth() {
+    const zip = new AdmZip()
+    zip.addLocalFolder("auth")
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+    const backupFile = `backup-auth-${timestamp}.zip`
+    zip.writeZip(backupFile)
+    console.log(`📦 Auth folder backed up as: ${backupFile}`)
 }
 
-console.log("🚀 Starting Jentle Bot...");
-startBot();
+// --- Start Jentle Bot ---
+async function startBot() {
+    console.log("🚀 Jentle is starting...")
+
+    const { state, saveCreds } = await useMultiFileAuthState("auth")
+    console.log("✅ Auth folder loaded successfully!")
+
+    const sock = makeWASocket({
+        logger: pino({ level: "fatal" }), // suppress internal Baileys logs
+        auth: state,
+        printQRInTerminal: false
+    })
+
+    // Save session and backup automatically
+    sock.ev.on("creds.update", async () => {
+        await saveCreds()
+        console.log("💾 Session saved!")
+        await backupAuth()
+    })
+
+    // Handle connection updates
+    sock.ev.on("connection.update", (update) => {
+        const { connection, lastDisconnect, qr } = update
+
+        if (qr && !fs.existsSync("auth/creds.json")) {
+            console.log("📸 Scan this QR to login:")
+            qrcode.generate(qr, { small: true })
+        }
+
+        if (connection === "close") {
+            const reason = lastDisconnect?.error?.output?.statusCode
+            if (reason === DisconnectReason.loggedOut) {
+                console.log("❌ Logged out! Delete auth folder and scan QR again.")
+            } else {
+                console.log("⚠️ Connection closed. Reconnecting...")
+                startBot()
+            }
+        }
+
+        if (connection === "open") {
+            console.log("✅ Jentle connected successfully and session is stable!")
+        }
+    })
+
+    // Handle incoming messages
+    sock.ev.on("messages.upsert", async (m) => {
+        const msg = m.messages[0]
+        if (!msg.message) return
+        if (msg.key.remoteJid === "status@broadcast") return
+
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ""
+
+        // Auto-delete links in groups
+        if (msg.key.remoteJid.endsWith("@g.us")) {
+            const hasLink = /(https?:\/\/|www\.)/i.test(text)
+            if (hasLink) {
+                const groupMeta = await sock.groupMetadata(msg.key.remoteJid)
+                const admins = groupMeta.participants.filter(p => p.admin).map(p => p.id)
+                const sender = msg.key.participant
+
+                if (!admins.includes(sender)) {
+                    await sock.sendMessage(msg.key.remoteJid, { delete: msg.key })
+                    await sock.sendMessage(msg.key.remoteJid, {
+                        text: `⚠️ @${sender.split("@")[0]} Links are not allowed!`,
+                        mentions: [sender]
+                    })
+                    return
+                }
+            }
+        }
+
+        // Menu command
+        if (text.trim().toLowerCase() === ".menu") {
+            await sock.sendMessage(msg.key.remoteJid, {
+                text: "✅ Jentle is active and running!"
+            })
+        }
+    })
+}
+
+startBot()
