@@ -2,14 +2,12 @@ const {
     default: makeWASocket,
     useMultiFileAuthState,
     DisconnectReason,
-    fetchLatestBaileysVersion,
-    logger
+    fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
-const fs = require('fs');
-const path = require('path');
+const pino = require('pino');
 
-// 🔇 Disable noisy Baileys logs
-logger.level = 'error';
+// Disable noisy logs using pino (Baileys uses it internally)
+const logger = pino({ level: 'error' });
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('./auth');
@@ -18,7 +16,8 @@ async function startBot() {
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: true,
-        version
+        version,
+        logger // Pass the silent logger
     });
 
     // Debug: Log every incoming message
@@ -29,7 +28,7 @@ async function startBot() {
         // Show message content in terminal
         console.log("\n📩 Incoming message debug:", JSON.stringify(msg, null, 2));
 
-        // Example: Respond to .menu
+        // Respond to .menu
         if (msg.message.conversation && msg.message.conversation.toLowerCase() === '.menu') {
             await sock.sendMessage(msg.key.remoteJid, { text: '✅ Jentle Bot is active!\n\nHere is your menu...' });
         }
