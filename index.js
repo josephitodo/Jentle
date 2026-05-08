@@ -1,107 +1,182 @@
 const makeWASocket = require("@whiskeysockets/baileys").default
-const { useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys")
+const {
+    useMultiFileAuthState,
+    DisconnectReason
+} = require("@whiskeysockets/baileys")
+
 const pino = require("pino")
 const fs = require("fs")
 const qrcode = require("qrcode-terminal")
-const AdmZip = require("adm-zip")
 
-// --- Filter noisy Baileys & terminal logs ---
+// --- Filter noisy Baileys logs ---
 const filterLogs = (method) => (...args) => {
     if (args.some(a => typeof a === "string" && a.includes("Closing stale open session"))) return
     if (args.some(a => typeof a === "string" && a.includes("Closing session:"))) return
     method(...args)
 }
+
 console.log = filterLogs(console.log)
 console.error = filterLogs(console.error)
 
-// --- Auto-backup auth folder ---
-async function backupAuth() {
-    const zip = new AdmZip()
-    zip.addLocalFolder("auth")
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
-    const backupFile = `backup-auth-${timestamp}.zip`
-    zip.writeZip(backupFile)
-    console.log(`📦 Auth folder backed up as: ${backupFile}`)
-}
+let reconnecting = false
 
-// --- Start Jentle Bot ---
 async function startBot() {
-    console.log("🚀 Jentle is starting...")
+    try {
+        console.log("🚀 Jentle is starting...")
 
-    const { state, saveCreds } = await useMultiFileAuthState("auth")
-    console.log("✅ Auth folder loaded successfully!")
+        const { state, saveCreds } = await useMultiFileAuthState("auth")
 
-    const sock = makeWASocket({
-        logger: pino({ level: "fatal" }), // suppress internal Baileys logs
-        auth: state,
-        printQRInTerminal: false
-    })
+        const sock = makeWASocket({
+            logger: pino({ level: "fatal" }),
+            auth: state,
+            printQRInTerminal: false,
+            browser: ["Jentle Bot", "Chrome", "1.0.0"]
+        })
 
-    // Save session and backup automatically
-    sock.ev.on("creds.update", async () => {
-        await saveCreds()
-        console.log("💾 Session saved!")
-        await backupAuth()
-    })
-
-    // Handle connection updates
-    sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect, qr } = update
-
-        if (qr && !fs.existsSync("auth/creds.json")) {
-            console.log("📸 Scan this QR to login:")
-            qrcode.generate(qr, { small: true })
+        // Pairing code login (best for hosting)
+        if (!state.creds.registered) {
+            const phoneNumber = "234XXXXXXXXXX" // CHANGE THIS
+            const code = await sock.requestPairingCode(phoneNumber)
+            console.log(`🔑 Pairing Code: ${code}`)
         }
 
-        if (connection === "close") {
-            const reason = lastDisconnect?.error?.output?.statusCode
-            if (reason === DisconnectReason.loggedOut) {
-                console.log("❌ Logged out! Delete auth folder and scan QR again.")
-            } else {
-                console.log("⚠️ Connection closed. Reconnecting...")
-                startBot()
+        // Save session
+        sock.ev.on("creds.update", async () => {
+            await saveCreds()
+            console.log("💾 Session saved!")
+        })
+
+        // Connection handling
+        sock.ev.on("connection.update", async (update) => {
+            const { connection, lastDisconnect, qr } = update
+
+            // QR fallback
+            if (qr && !state.creds.registered) {
+                console.log("📸 Scan QR if pairing code fails:")
+                qrcode.generate(qr, { small: true })
             }
-        }
 
-        if (connection === "open") {
-            console.log("✅ Jentle connected successfully and session is stable!")
-        }
-    })
+            if (connection === "open") {
+                reconnecting = false
+                console.log("✅ Jentle connected successfully!")
+            }
 
-    // Handle incoming messages
-    sock.ev.on("messages.upsert", async (m) => {
-        const msg = m.messages[0]
-        if (!msg.message) return
-        if (msg.key.remoteJid === "status@broadcast") return
+            if (connection === "close") {
+                const reason = lastDisconnect?.error?.output?.statusCode
 
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || ""
+                if (reason === DisconnectReason.loggedOut) {
+                    console.log("❌ Logged out! Delete auth folder and login again.")
+                    return
+                }
 
-        // Auto-delete links in groups
-        if (msg.key.remoteJid.endsWith("@g.us")) {
-            const hasLink = /(https?:\/\/|www\.)/i.test(text)
-            if (hasLink) {
-                const groupMeta = await sock.groupMetadata(msg.key.remoteJid)
-                const admins = groupMeta.participants.filter(p => p.admin).map(p => p.id)
-                const sender = msg.key.participant
+                if (!reconnecting) {
+                    reconnecting = true
+                    console.log("⚠️ Connection lost. Reconnecting in 5 seconds...")
+                    setTimeout(() => {
+                        startBot()
+                    }, 5000)
+                }
+            }
+        })
 
-                if (!admins.includes(sender)) {
-                    await sock.sendMessage(msg.key.remoteJid, { delete: msg.key })
-                    await sock.sendMessage(msg.key.remoteJid, {
-                        text: `⚠️ @${sender.split("@")[0]} Links are not allowed!`,
-                        mentions: [sender]
+        // Blocked ad keywords
+        const blockedWords = [
+            "bet now",
+            "loan offer",
+            "crypto",
+            "airdrop",
+            "dm for business",
+            "click here",
+            "investment",
+            "earn money fast",
+            "promo",
+            "casino",
+            "giveaway",
+            "forex"
+        ]
+
+        // Incoming messages
+        sock.ev.on("messages.upsert", async (m) => {
+            try {
+                const msg = m.messages[0]
+                if (!msg?.message) return
+                if (msg.key.remoteJid === "status@broadcast") return
+
+                const jid = msg.key.remoteJid
+                const sender = msg.key.participant || msg.key.remoteJid
+
+                const text =
+                    msg.message.conversation ||
+                    msg.message.extendedTextMessage?.text ||
+                    msg.message.imageMessage?.caption ||
+                    msg.message.videoMessage?.caption ||
+                    ""
+
+                if (!text) return
+
+                // Menu command
+                if (text.trim().toLowerCase() === ".menu") {
+                    await sock.sendMessage(jid, {
+                        text: "✅ Jentle Bot is active and protecting this group."
                     })
                     return
                 }
-            }
-        }
 
-        // Menu command
-        if (text.trim().toLowerCase() === ".menu") {
-            await sock.sendMessage(msg.key.remoteJid, {
-                text: "✅ Jentle is active and running!"
-            })
+                // Group moderation
+                if (jid.endsWith("@g.us")) {
+                    const groupMeta = await sock.groupMetadata(jid)
+
+                    const admins = groupMeta.participants
+                        .filter(p => p.admin)
+                        .map(p => p.id)
+
+                    const botId = sock.user.id.split(":")[0] + "@s.whatsapp.net"
+                    const botIsAdmin = admins.includes(botId)
+
+                    if (!botIsAdmin) {
+                        console.log("⚠️ Bot is not admin in this group.")
+                        return
+                    }
+
+                    // Skip admin messages
+                    if (admins.includes(sender)) return
+
+                    const hasLink = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.(com|net|org|ng|io|me|xyz|ly|app|co))/i.test(text)
+
+                    const hasAd = blockedWords.some(word =>
+                        text.toLowerCase().includes(word)
+                    )
+
+                    if (hasLink || hasAd) {
+                        await sock.sendMessage(jid, {
+                            delete: msg.key
+                        })
+
+                        await sock.sendMessage(jid, {
+                            text: `⚠️ @${sender.split("@")[0]} Ads and links are not allowed here.`,
+                            mentions: [sender]
+                        })
+
+                        console.log(`🗑 Deleted spam from ${sender}`)
+                        return
+                    }
+                }
+
+            } catch (err) {
+                console.log("Message handling error:", err.message)
+            }
+        })
+
+    } catch (err) {
+        console.log("Startup error:", err.message)
+
+        if (!reconnecting) {
+            reconnecting = true
+            setTimeout(() => {
+                startBot()
+            }, 5000)
         }
-    })
+    }
 }
 
 startBot()
