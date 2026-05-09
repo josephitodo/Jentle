@@ -1,7 +1,7 @@
 {
-  "name": "jentle",
-  "version": "1.0.0",
-  "description": "Jentle WhatsApp Bot",
+  "name": "jentle-v2",
+  "version": "2.0.0",
+  "description": "Jentle WhatsApp Group Management Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,9 +9,7 @@
   "author": "Joseph Itodo",
   "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.18",
-    "pino": "^8.17.1",
-    "qrcode-terminal": "^0.12.0",
-    "fs-extra": "^11.2.0"
+    "@whiskeysockets/baileys": "^6.7.21",
+    "pino": "^8.17.1"
   }
 }
