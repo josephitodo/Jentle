@@ -16,12 +16,19 @@ function getText(msg) {
     msg.message?.videoMessage?.caption ||
     msg.message?.ephemeralMessage?.message?.conversation ||
     msg.message?.ephemeralMessage?.message?.extendedTextMessage?.text ||
+    msg.message?.viewOnceMessage?.message?.conversation ||
+    msg.message?.viewOnceMessage?.message?.extendedTextMessage?.text ||
     ""
   )
 }
 
+// FIXED OWNER CHECK
+function normalizeJid(jid = "") {
+  return jid.split("@")[0].split(":")[0]
+}
+
 function isOwner(sender) {
-  return sender.includes(OWNER)
+  return normalizeJid(sender) === OWNER
 }
 
 function isLink(text) {
@@ -54,6 +61,7 @@ function isBadWord(text) {
 module.exports = {
   OWNER,
   getText,
+  normalizeJid,
   isOwner,
   isLink,
   isSpam,
