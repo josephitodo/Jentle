@@ -15,10 +15,14 @@ async function handleAdmin(sock, jid, msg, text) {
     const metadata = await sock.groupMetadata(jid)
     const mentions = metadata.participants.map(p => p.id)
 
-    const textMsg = mentions.map(m => `@${m.split("@")[0]}`).join("\n")
+    let message = "📢 TAG ALL\n\n"
+
+    for (const user of mentions) {
+      message += `@${user.split("@")[0]}\n`
+    }
 
     await sock.sendMessage(jid, {
-      text: textMsg,
+      text: message,
       mentions
     })
 
@@ -49,7 +53,7 @@ async function handleAdmin(sock, jid, msg, text) {
     resetWarnings(jid, target)
 
     await sock.sendMessage(jid, {
-      text: "✅ Warnings reset.",
+      text: "✅ Warning reset.",
       mentions: [target]
     })
 
